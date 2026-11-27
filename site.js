@@ -1,5 +1,5 @@
 function esc(v){return String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]))}
-const API={base:"https://admin.hpllogistics.co/api/tracking_api/get_tracking_data",companyId:"33",customerCode:"H1291"};
+const API={base:"https://admin.hpllogistics.co/api/tracking_api/get_tracking_data",companyId:"33",customerCodes:["H1291","H2489"]};
 const WHATSAPP="919501001114";
 const RATES=[
  {carrier:"DHL",service:"International Express",destination:"Canada",min:0,max:2,base:1800,perKg:0},
@@ -23,15 +23,21 @@ function calcWeight(b){const pieces=Math.max(1,Number(b.pieces)||1),actual=Math.
 function localQuote(b){const c=calcWeight(b),service=b.service||"International Express";const r=RATES.find(r=>r.destination===b.destination&&r.carrier===b.carrier&&r.service===service&&r.min<=c.chargeableWeight&&r.max>=c.chargeableWeight);if(!r)return{found:false,...c,message:"No configured tariff for this combination yet."};return{found:true,...c,carrier:b.carrier,service,destination:b.destination,currency:"INR",estimatedFreight:Math.round(r.base+Math.max(0,c.chargeableWeight-r.min)*r.perKg)}}
 async function liveTrack(awb){
   if(!awb)return{error:"Tracking number required."};
-  try{
-    const u=new URL(API.base);u.searchParams.set("api_company_id",API.companyId);u.searchParams.set("customer_code",API.customerCode);u.searchParams.set("tracking_no",awb);
-    const r=await fetch(u);if(!r.ok)throw new Error("HTTP "+r.status);
-    const data=await r.json(),t=Array.isArray(data)?data[0]:data;
-    if(!t||t.errors||!t.docket_info)return{error:"No shipment found for that tracking number."};
-    const info=Object.fromEntries(t.docket_info);
-    const events=(t.docket_events||[]).map(e=>({title:e.event_description,location:e.event_location||"",at:e.event_at||"",state:e.event_state||""}));
-    return{live:true,awb:t.tracking_no||awb,carrier:info["Service Name"]||"TMS Global",status:info["Status"]||"In Transit",origin:info["Origin"]||"",destination:info["Destination"]||"",expected_delivery:t.expected_datetime||null,forwarding_no:t.forwarding_no||null,booked:info["Booking Date"]||null,delivered_at:info["Delivery Date and Time"]||null,origin_city:info["Shipper City"]||"",destination_city:info["Consignee City"]||"",consignee_name:info["Consignee Name"]||info["Consignee"]||t.consignee_name||null,pieces:t.pcs||null,weight:t.chargeable_weight||null,events}
-  }catch(err){console.error("Tracking lookup failed:",err);return{error:"Tracking service is unavailable right now. Please try again shortly."}}
+  let hadServiceError=false;
+  for(const customerCode of API.customerCodes){
+    try{
+      const u=new URL(API.base);u.searchParams.set("api_company_id",API.companyId);u.searchParams.set("customer_code",customerCode);u.searchParams.set("tracking_no",awb);
+      const r=await fetch(u);if(!r.ok)throw new Error("HTTP "+r.status);
+      const data=await r.json(),t=Array.isArray(data)?data[0]:data;
+      if(!t||t.errors||!t.docket_info)continue;
+      const info=Object.fromEntries(t.docket_info);
+      const events=(t.docket_events||[]).map(e=>({title:e.event_description,location:e.event_location||"",at:e.event_at||"",state:e.event_state||""}));
+      return{live:true,awb:t.tracking_no||awb,carrier:info["Service Name"]||"TMS Global",status:info["Status"]||"In Transit",origin:info["Origin"]||"",destination:info["Destination"]||"",expected_delivery:t.expected_datetime||null,forwarding_no:t.forwarding_no||null,booked:info["Booking Date"]||null,delivered_at:info["Delivery Date and Time"]||null,origin_city:info["Shipper City"]||"",destination_city:info["Consignee City"]||"",consignee_name:info["Consignee Name"]||info["Consignee"]||t.consignee_name||null,pieces:t.pcs||null,weight:t.chargeable_weight||null,events};
+    }catch(err){hadServiceError=true;console.error("Tracking lookup failed for customer code",customerCode,err);}
+  }
+  return hadServiceError
+    ?{error:"Tracking service is unavailable right now. Please try again shortly."}
+    :{error:"No shipment found for that tracking number."};
 }
 function sendCheck(q){q=String(q||"").trim().toLowerCase();if(!q)return{level:"unknown",title:"Tell us what you want to send",message:"Enter an item name and we\u2019ll show the type of review it may need."};const hit=SEND_RULES.find(r=>r.keywords.some(k=>q.includes(k)));return hit||{level:"general",title:"Item may be accepted",message:"This is only a preliminary check. Carrier, customs and destination rules still apply."}}
 function openWhatsApp(lines){window.open("https://wa.me/"+WHATSAPP+"?text="+encodeURIComponent(lines.join("\n")),"_blank","noopener")}
